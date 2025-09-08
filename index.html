@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Flags Quiz Client</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, Arial, sans-serif;
+        margin: 20px;
+      }
+      .row {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .col {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #flag {
+        border: 1px solid #ddd;
+        padding: 12px;
+        width: 100px;
+        height: 100px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #flag img {
+        image-rendering: -webkit-optimize-contrast;
+      }
+      #log {
+        border: 1px solid #ddd;
+        padding: 10px;
+        height: 260px;
+        overflow: auto;
+        background: #fafafa;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      button {
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      input[type="text"] {
+        padding: 8px;
+        width: 240px;
+      }
+      small.muted {
+        color: #666;
+      }
+      .ok {
+        color: #0a7;
+      }
+      .warn {
+        color: #a60;
+      }
+      .err {
+        color: #c22;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Flags Quiz Test Client</h2>
+    <div class="col">
+      <div class="row">
+        <label for="server">Server URL:</label>
+        <input id="server" type="text" value="http://localhost:7000" />
+        <button id="connectBtn">Connect</button>
+        <span id="connState"><small class="muted">disconnected</small></span>
+      </div>
+      <div class="row">
+        <button id="joinBtn" disabled>Join Game</button>
+        <span id="gameInfo"><small class="muted">Not in game</small></span>
+      </div>
+      <div class="row">
+        <div id="flag"><small class="muted">No flag yet</small></div>
+        <div class="col">
+          <div>Question: <span id="qNum">-</span>/10</div>
+          <div class="row">
+            <input id="answer" type="text" placeholder="Type country name..." />
+            <button id="sendAnswer" disabled>Answer</button>
+          </div>
+        </div>
+      </div>
+      <div id="log"></div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+      let socket = null;
+      const els = {
+        server: document.getElementById("server"),
+        connectBtn: document.getElementById("connectBtn"),
+        connState: document.getElementById("connState"),
+        joinBtn: document.getElementById("joinBtn"),
+        gameInfo: document.getElementById("gameInfo"),
+        flag: document.getElementById("flag"),
+        qNum: document.getElementById("qNum"),
+        answer: document.getElementById("answer"),
+        sendAnswer: document.getElementById("sendAnswer"),
+        log: document.getElementById("log"),
+      };
+
+      function log(msg, cls = "") {
+        const div = document.createElement("div");
+        if (cls) div.className = cls;
+        div.textContent = msg;
+        els.log.appendChild(div);
+        els.log.scrollTop = els.log.scrollHeight;
+      }
+
+      function setConnected(connected) {
+        els.connState.innerHTML = connected
+          ? '<span class="ok">connected</span>'
+          : '<small class="muted">disconnected</small>';
+        els.joinBtn.disabled = !connected;
+        els.sendAnswer.disabled = !connected;
+      }
+
+      function setFlag(url) {
+        els.flag.innerHTML = "";
+        if (!url) {
+          els.flag.innerHTML = '<small class="muted">No flag yet</small>';
+          return;
+        }
+        const img = document.createElement("img");
+        img.src = url;
+        img.width = 64;
+        img.height = 48;
+        img.alt = "Flag";
+        els.flag.appendChild(img);
+      }
+
+      function bindSocketEvents() {
+        socket.on("connect", () => {
+          setConnected(true);
+          log("Connected. Socket ID: " + socket.id, "ok");
+        });
+
+        socket.on("connect_error", (err) => {
+          log("Connect error: " + err.message, "err");
+        });
+
+        socket.on("disconnect", (reason) => {
+          setConnected(false);
+          els.gameInfo.innerHTML = '<small class="muted">Not in game</small>';
+          setFlag(null);
+          els.qNum.textContent = "-";
+          log("Disconnected: " + reason, "warn");
+        });
+
+        socket.on("waitingForOpponent", () => {
+          log("Waiting for opponent...", "warn");
+          els.gameInfo.textContent = "Waiting for opponent...";
+        });
+
+        socket.on("gameStart", ({ gameId, opponentId }) => {
+          log(
+            "Game started. Game ID: " + gameId + " | Opponent: " + opponentId,
+            "ok"
+          );
+          els.gameInfo.textContent = "In game: " + gameId;
+        });
+
+        socket.on("newQuestion", ({ flagUrl, questionNum }) => {
+          log("New question #" + questionNum + " received");
+          setFlag(flagUrl);
+          els.qNum.textContent = questionNum;
+          els.answer.value = "";
+          els.answer.focus();
+        });
+
+        socket.on("correctAnswer", ({ playerId, correct }) => {
+          const me = playerId === socket.id ? "You" : "Opponent";
+          log(me + " answered correctly: " + correct, "ok");
+        });
+
+        socket.on("wrongAnswer", () => {
+          log("Wrong answer", "err");
+        });
+
+        socket.on("timeUp", ({ correct }) => {
+          log("Time up. Correct answer: " + correct, "warn");
+        });
+
+        socket.on("gameEnd", (results) => {
+          const { player1, player2 } = results;
+          const meScore =
+            player1.id === socket.id ? player1.score : player2.score;
+          const oppScore =
+            player1.id === socket.id ? player2.score : player1.score;
+          log("Game ended. You: " + meScore + " | Opponent: " + oppScore, "ok");
+          els.gameInfo.innerHTML = '<small class="muted">Game ended</small>';
+          setFlag(null);
+          els.qNum.textContent = "-";
+        });
+
+        socket.on("opponentDisconnected", () => {
+          log("Opponent disconnected", "warn");
+          els.gameInfo.innerHTML =
+            '<small class="muted">Opponent disconnected</small>';
+        });
+      }
+
+      els.connectBtn.addEventListener("click", () => {
+        if (socket && socket.connected) {
+          socket.disconnect();
+          return;
+        }
+        const url = els.server.value.trim();
+        socket = io(url, { transports: ["websocket"], withCredentials: false });
+        bindSocketEvents();
+      });
+
+      els.joinBtn.addEventListener("click", () => {
+        if (!socket || !socket.connected) {
+          log("Not connected", "err");
+          return;
+        }
+        socket.emit("joinGame");
+        log("Sent joinGame");
+      });
+
+      els.sendAnswer.addEventListener("click", () => {
+        if (!socket || !socket.connected) {
+          log("Not connected", "err");
+          return;
+        }
+        const ans = els.answer.value.trim();
+        if (!ans) return;
+        socket.emit("answer", ans);
+        log("Answered: " + ans);
+        els.answer.value = "";
+        els.answer.focus();
+      });
+
+      els.answer.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          els.sendAnswer.click();
+        }
+      });
+    </script>
+  </body>
+</html>
